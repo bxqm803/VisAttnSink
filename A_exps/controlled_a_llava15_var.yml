@@ -4,7 +4,7 @@ name_category: ""
 
 path_image_dir: /ddnB/work/mwang32/test/AdaptVis/data/controlled_images
 path_question_dir: D_datasets/Controlled_Images_A/Questions
-path_model: liuhaotian/llava-v1.5-7b
+path_model: llava-hf/llava-1.5-7b-hf
 
 conv_mode: vicuna_v1
 
