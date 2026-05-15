@@ -259,8 +259,15 @@ def eval_model(args):
                 # Only decode newly generated tokens.
                 # Otherwise the prompt contains answer options like left/right/on/under,
                 # which can corrupt later evaluation.
-                generated_ids = outputs.sequences[:, input_ids.shape[1]:]
+                seq = outputs.sequences
 
+                # Some generate() implementations return prompt + generated tokens.
+                # Others return only generated tokens when inputs_embeds is used.
+                # So only slice when sequence length is actually longer than input length.
+                if seq.shape[1] > input_ids.shape[1]:
+                    generated_ids = seq[:, input_ids.shape[1]:]
+                else:
+                    generated_ids = seq
                 generated_texts = tokenizer.batch_decode(
                     generated_ids,
                     skip_special_tokens=True,
