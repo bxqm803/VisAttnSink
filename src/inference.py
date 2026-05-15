@@ -49,9 +49,10 @@ def get_chunk(lst, n, k):
 
 def get_safe_qid(line, idx):
     """
-    Avoid the bug:
-        qid = line.get("qid") or line.get("question_id")
-    because qid=0 is a valid id but bool(0) == False.
+    Avoid:
+        line.get("qid") or line.get("question_id")
+
+    because qid=0 is valid, but bool(0) == False.
     """
     for key in ["qid", "question_id", "id", "image_id"]:
         if key in line and line[key] is not None:
@@ -126,18 +127,116 @@ def resolve_image_path(path_image_dir, image_file):
     raise FileNotFoundError(f"Cannot find image: {image_path}")
 
 
+def _candidate_token_ids(tokenizer, word):
+    """
+    Collect single-token ids for lowercase / capitalized / space-prefixed variants.
+
+    Vicuna/LLaVA tokenizers are case-sensitive, so:
+        left / Left / " left" / " Left"
+    may have very different probabilities.
+    """
+    variants = [
+        word,
+        word.capitalize(),
+        " " + word,
+        " " + word.capitalize(),
+    ]
+
+    out = []
+
+    for surface in variants:
+        try:
+            token_ids = tokenizer.encode(surface, add_special_tokens=False)
+        except Exception:
+            token_ids = []
+
+        if len(token_ids) == 1:
+            out.append((surface, int(token_ids[0])))
+
+    return out
+
+
+def fallback_relation_from_scores(outputs, tokenizer, relations=None):
+    """
+    If free generation returns empty string, choose from fixed relation words
+    using the first generation step logits.
+
+    This is suitable for Controlled_Images_A:
+        left / right / on / under
+    """
+    if relations is None:
+        relations = ["left", "right", "on", "under"]
+
+    if not hasattr(outputs, "scores"):
+        return ""
+
+    if outputs.scores is None or len(outputs.scores) == 0:
+        return ""
+
+    logits = outputs.scores[0][0].detach().float()
+    probs = torch.softmax(logits, dim=-1)
+
+    best_rel = ""
+    best_prob = -1.0
+    best_surface = None
+    best_tid = None
+
+    for rel in relations:
+        for surface, tid in _candidate_token_ids(tokenizer, rel):
+            p = float(probs[tid].item())
+
+            if p > best_prob:
+                best_prob = p
+                best_rel = rel
+                best_surface = surface
+                best_tid = tid
+
+    return best_rel
+
+
+def decode_generated_text(outputs, input_ids, tokenizer):
+    """
+    Some generate implementations return:
+        prompt + generated tokens
+    while others return:
+        only generated tokens
+
+    Decode robustly. If decoded text is empty, return "" and let caller fallback.
+    """
+    seq = outputs.sequences
+
+    if seq.shape[1] > input_ids.shape[1]:
+        generated_ids = seq[:, input_ids.shape[1] :]
+    else:
+        generated_ids = seq
+
+    text = tokenizer.batch_decode(
+        generated_ids,
+        skip_special_tokens=True,
+        clean_up_tokenization_spaces=False,
+    )[0].strip()
+
+    return text, generated_ids
+
+
 def eval_model(args):
     with open(args.exp_config, "r") as file:
         config_dict = yaml.safe_load(file)
 
     cfgs = SimpleNamespace(**config_dict)
 
-    device = f"cuda:{args.device}" if torch.cuda.is_available() else "cpu"
+    if torch.cuda.is_available():
+        device_id = 0 if args.device is None else args.device
+        device = f"cuda:{device_id}"
+    else:
+        device_id = None
+        device = "cpu"
+
     cfgs.device = device
 
     print("\n\n\n")
     if torch.cuda.is_available():
-        print(f"Using device: {torch.cuda.get_device_name(args.device)}-{args.device}")
+        print(f"Using device: {torch.cuda.get_device_name(device_id)}-{device_id}")
     else:
         print("Using device: CPU")
     pprint(vars(cfgs))
@@ -250,29 +349,30 @@ def eval_model(args):
                             return_dict_in_generate=True,
                             output_attentions=True,
                             output_hidden_states=True,
+                            output_scores=True,
                             do_sample=False,
                             max_new_tokens=cfgs.max_new_tokens,
+                            min_new_tokens=1,
                             use_cache=True,
+                            pad_token_id=tokenizer.eos_token_id,
                         )
 
-                # Important:
-                # Only decode newly generated tokens.
-                # Otherwise the prompt contains answer options like left/right/on/under,
-                # which can corrupt later evaluation.
-                seq = outputs.sequences
+                generated_texts, generated_ids = decode_generated_text(
+                    outputs=outputs,
+                    input_ids=input_ids,
+                    tokenizer=tokenizer,
+                )
 
-                # Some generate() implementations return prompt + generated tokens.
-                # Others return only generated tokens when inputs_embeds is used.
-                # So only slice when sequence length is actually longer than input length.
-                if seq.shape[1] > input_ids.shape[1]:
-                    generated_ids = seq[:, input_ids.shape[1]:]
-                else:
-                    generated_ids = seq
-                generated_texts = tokenizer.batch_decode(
-                    generated_ids,
-                    skip_special_tokens=True,
-                    clean_up_tokenization_spaces=False,
-                )[0].strip()
+                used_fallback = False
+
+                # If generation is empty / only special tokens, use first-step logits.
+                if generated_texts == "":
+                    generated_texts = fallback_relation_from_scores(
+                        outputs=outputs,
+                        tokenizer=tokenizer,
+                        relations=["left", "right", "on", "under"],
+                    )
+                    used_fallback = True
 
                 ans_file.write(
                     json.dumps(
@@ -281,6 +381,10 @@ def eval_model(args):
                             "prompt": cur_prompt,
                             "label": gt_label,
                             "response": generated_texts,
+                            "used_fallback": used_fallback,
+                            "raw_sequence_len": int(outputs.sequences.shape[1]),
+                            "input_len": int(input_ids.shape[1]),
+                            "generated_len": int(generated_ids.shape[1]),
                             "image": image_file_for_output,
                             "model_id": name_model,
                         },
