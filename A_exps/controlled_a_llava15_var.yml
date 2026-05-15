@@ -1,0 +1,17 @@
+name_exp: controlled_a_llava15_var
+name_daset: Controlled_Images_A
+name_category: ""
+
+path_image_dir: /ddnB/work/mwang32/test/AdaptVis/data/controlled_images
+path_question_dir: D_datasets/Controlled_Images_A/Questions
+path_model: liuhaotian/llava-v1.5-7b
+
+conv_mode: vicuna_v1
+
+logic: 1
+tau: 20
+rho: 0.5
+p: 0.6
+summ: 0.2
+max_new_tokens: 8
+except_last_layer: 1
