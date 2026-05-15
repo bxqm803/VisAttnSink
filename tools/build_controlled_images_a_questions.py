@@ -133,15 +133,13 @@ def main():
 
         rows.append(
             {
-                "qid": idx,
-                "question_id": idx,
+                "qid": i,
+                "question_id": i,
                 "image": image_rel,
-                "question": question,
-                "text": question,
-                "answer": rel,
+                "caption_options": caption_options,
+                "answer": 0,
                 "label": rel,
                 "caption": correct_caption,
-                "caption_options": caption_options,
                 "source_image_path": str(image_path),
             }
         )
