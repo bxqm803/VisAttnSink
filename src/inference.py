@@ -134,7 +134,12 @@ def eval_model(args):
                             use_cache=True,
                         )
                                         
-                generated_texts = tokenizer.batch_decode(outputs.sequences)[0]
+                generated_ids = outputs.sequences[:, input_ids.shape[1]:]
+                generated_texts = tokenizer.batch_decode(
+                    generated_ids,
+                    skip_special_tokens=True,
+                    clean_up_tokenization_spaces=False,
+                )[0].strip()
 
                 ans_file.write(json.dumps(
                     {"question_id": qid, 
