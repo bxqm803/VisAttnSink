@@ -88,7 +88,9 @@ def resolve_image_path(path_image_dir, image_file):
 def build_prompt_for_caption(model, cfgs, caption):
     """
     Build prompt for one candidate caption.
-    We will mask the prefix and compute LM loss only on the caption-related tokens.
+
+    Return both prompt strings and conversation objects because this repo's
+    tokenizer_image_token() expects conv.roles.
     """
     if model.config.mm_use_im_start_end:
         image_prefix = (
@@ -112,7 +114,7 @@ def build_prompt_for_caption(model, cfgs, caption):
     conv_prefix.append_message(conv_prefix.roles[1], None)
     prefix_prompt = conv_prefix.get_prompt()
 
-    return full_prompt, prefix_prompt
+    return full_prompt, prefix_prompt, conv, conv_prefix
 
 
 @torch.no_grad()
@@ -126,13 +128,23 @@ def score_caption_option(
     caption,
     score_mode="mean",
 ):
-    full_prompt, prefix_prompt = build_prompt_for_caption(model, cfgs, caption)
+    """
+    Score one caption option by masked LM loss.
+
+    The prefix part is masked out, so the score mainly reflects the candidate
+    caption tokens. Higher score means better caption.
+    """
+    full_prompt, prefix_prompt, conv, conv_prefix = build_prompt_for_caption(
+        model=model,
+        cfgs=cfgs,
+        caption=caption,
+    )
 
     input_ids = tokenizer_image_token(
         full_prompt,
         tokenizer,
         IMAGE_TOKEN_INDEX,
-        conv=None,
+        conv=conv,
         return_tensors="pt",
     ).unsqueeze(0).to(device=device)
 
@@ -140,7 +152,7 @@ def score_caption_option(
         prefix_prompt,
         tokenizer,
         IMAGE_TOKEN_INDEX,
-        conv=None,
+        conv=conv_prefix,
         return_tensors="pt",
     ).unsqueeze(0).to(device=device)
 
@@ -301,11 +313,10 @@ def eval_model(args):
                         score_mode=score_mode,
                     )
 
-                    score = (
-                        rec["mean_logprob"]
-                        if score_mode == "mean"
-                        else rec["sum_logprob"]
-                    )
+                    if score_mode == "sum":
+                        score = rec["sum_logprob"]
+                    else:
+                        score = rec["mean_logprob"]
 
                     option_records.append(
                         {
