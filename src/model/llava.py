@@ -311,8 +311,9 @@ class TunedLlamaModel(LlamaModel, GenerationMixin):
                 all_hidden_states += (hidden_states,)
 
             # dim prospector
-            if DimProspector._flag() and ValueMonitor.get_output_token_count() < 0 :
-                if isinstance(DimProspector.sink_select_layers, list) and i in DimProspector.sink_select_layers:
+            sink_select_layers = getattr(DimProspector, "sink_select_layers", [])
+            if DimProspector._flag() and ValueMonitor.get_output_token_count() < 0:
+                if isinstance(sink_select_layers, list) and i in sink_select_layers:
                     DimProspector.run_logic(hidden_states, layer=i)
 
             if self.gradient_checkpointing and self.training:
